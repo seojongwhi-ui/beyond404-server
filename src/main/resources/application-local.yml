@@ -5,8 +5,6 @@ spring:
     username: ${SWAPIT_DB_USERNAME:swapit_user}
     password: ${SWAPIT_DB_PASSWORD:wYJRuqD4A7KmC:d}
   
-  
-
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
