@@ -3,6 +3,7 @@ package com.swapit.service;
 import com.swapit.domain.SwapRequestState;
 import com.swapit.domain.entity.ApplianceEntity;
 import com.swapit.domain.entity.ApplianceImageEntity;
+import com.swapit.domain.entity.PickupRequestEntity;
 import com.swapit.domain.entity.SwapRequestEntity;
 import com.swapit.domain.entity.UserEntity;
 import com.swapit.domain.entity.ValuationEntity;
@@ -20,6 +21,7 @@ import com.swapit.dto.SwapRequestResponse;
 import com.swapit.dto.UpdateApplianceRequest;
 import com.swapit.repository.ApplianceImageRepository;
 import com.swapit.repository.ApplianceRepository;
+import com.swapit.repository.PickupRequestRepository;
 import com.swapit.repository.SwapRequestRepository;
 import com.swapit.repository.UserRepository;
 import com.swapit.repository.ValuationRepository;
@@ -34,6 +36,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
@@ -57,6 +60,7 @@ public class SwapRequestService {
     private final ApplianceImageRepository applianceImageRepository;
     private final ValuationRepository valuationRepository;
     private final GoogleRoutesService googleRoutesService;
+    private final PickupRequestRepository pickupRequestRepository;
 
     private final AtomicLong sequence = new AtomicLong(1);
     private final Map<Long, SwapRequestState> store = new ConcurrentHashMap<>();
@@ -94,6 +98,7 @@ public class SwapRequestService {
         return buildResponse(state);
     }
 
+    @Transactional
     public SwapRequestResponse updateAppliance(long id, UpdateApplianceRequest request) {
         SwapRequestState state = findState(id);
         state.updateAppliance(
@@ -103,13 +108,18 @@ public class SwapRequestService {
                 request.estimatedAge(),
                 request.exteriorCondition()
         );
-        return buildResponse(state);
+        persistApplianceConfirmation(id, request);
+        return state.toResponse();
     }
 
+    @Transactional
     public SwapRequestResponse acceptPreValuation(long id) {
         SwapRequestState state = findState(id);
         state.acceptPreValuation();
-        return buildResponse(state);
+        SwapRequestEntity swapRequest = findSwapRequestEntity(id);
+        swapRequest.changeStatus(SwapRequestStatus.PRE_VALUATION_ACCEPTED.name());
+        swapRequestRepository.save(swapRequest);
+        return state.toResponse();
     }
 
     public SwapRequestResponse selectReplacementProduct(long id, SelectReplacementProductRequest request) {
@@ -124,6 +134,7 @@ public class SwapRequestService {
         return buildResponse(state);
     }
 
+    @Transactional
     public SwapRequestResponse confirmBooking(long id, BookingRequest request) {
         SwapRequestState state = findState(id);
         state.confirmBooking(
@@ -134,13 +145,66 @@ public class SwapRequestService {
                 request.pickupLat(),
                 request.pickupLng()
         );
-        return buildResponse(state);
+        PickupRequestEntity pickupRequest = persistPickupRequest(
+                id,
+                "BOOKING",
+                "CONFIRMED",
+                request.bookingDate(),
+                request.bookingTime(),
+                request.address(),
+                request.detailAddress(),
+                request.pickupLat(),
+                request.pickupLng()
+        );
+        state.restorePickup(
+                pickupRequest.getId(),
+                pickupRequest.getPickupType(),
+                pickupRequest.getStatus(),
+                pickupRequest.getCrewId(),
+                pickupRequest.getCrewName(),
+                pickupRequest.getBookingDate(),
+                pickupRequest.getBookingTime(),
+                toLocalDateTime(pickupRequest.getCreatedAt()),
+                pickupRequest.getAddress(),
+                pickupRequest.getDetailAddress(),
+                pickupRequest.getPickupLat(),
+                pickupRequest.getPickupLng()
+        );
+        enrichGpsContext(state);
+        return state.toResponse();
     }
 
+    @Transactional
     public SwapRequestResponse requestInstantCall(long id, InstantCallRequest request) {
         SwapRequestState state = findState(id);
         state.requestInstantCall(request.address(), request.detailAddress(), request.pickupLat(), request.pickupLng());
-        return buildResponse(state);
+        PickupRequestEntity pickupRequest = persistPickupRequest(
+                id,
+                "INSTANT_CALL",
+                "REQUESTED",
+                null,
+                null,
+                request.address(),
+                request.detailAddress(),
+                request.pickupLat(),
+                request.pickupLng()
+        );
+        state.restorePickup(
+                pickupRequest.getId(),
+                pickupRequest.getPickupType(),
+                pickupRequest.getStatus(),
+                pickupRequest.getCrewId(),
+                pickupRequest.getCrewName(),
+                pickupRequest.getBookingDate(),
+                pickupRequest.getBookingTime(),
+                toLocalDateTime(pickupRequest.getCreatedAt()),
+                pickupRequest.getAddress(),
+                pickupRequest.getDetailAddress(),
+                pickupRequest.getPickupLat(),
+                pickupRequest.getPickupLng()
+        );
+        enrichGpsContext(state);
+        return state.toResponse();
     }
 
     public SwapRequestResponse completeMockFinalValuation(long id) {
@@ -178,6 +242,12 @@ public class SwapRequestService {
         return buildResponse(state);
     }
 
+    @Transactional(readOnly = true)
+    public Optional<SwapRequestResponse> getLatestByUser(long userId) {
+        return swapRequestRepository.findFirstByUser_IdOrderByCreatedAtDesc(userId)
+                .map(this::restoreAndRespond);
+    }
+
     public SwapRequestResponse getTracking(long id) {
         SwapRequestState state = findState(id);
         return buildResponse(state);
@@ -190,31 +260,11 @@ public class SwapRequestService {
                 .toList();
     }
 
+    @Transactional(readOnly = true)
     public List<SwapRequestResponse> getAvailableCalls() {
-        return getPendingCalls();
-    }
-
-    public List<SwapRequestResponse> getPendingCalls() {
-        return store.values().stream()
-                .filter(state -> state.getPickupRequestId() != null)
-                .filter(state -> {
-                    String status = state.getPickupStatus();
-                    return "REQUESTED".equals(status) || "CONFIRMED".equals(status);
-                })
-                .sorted(Comparator.comparingLong(SwapRequestState::getId).reversed())
-                .map(this::buildResponse)
-                .toList();
-    }
-
-    public List<SwapRequestResponse> getActiveCalls() {
-        return store.values().stream()
-                .filter(state -> state.getPickupRequestId() != null)
-                .filter(state -> {
-                    String status = state.getPickupStatus();
-                    return "ASSIGNED".equals(status) || "IN_PROGRESS".equals(status) || "ARRIVED".equals(status);
-                })
-                .sorted(Comparator.comparingLong(SwapRequestState::getId).reversed())
-                .map(this::buildResponse)
+        return pickupRequestRepository.findByStatusInOrderByCreatedAtDesc(List.of("REQUESTED", "CONFIRMED")).stream()
+                .map(PickupRequestEntity::getSwapRequest)
+                .map(this::restoreAndRespond)
                 .toList();
     }
 
@@ -576,8 +626,7 @@ public class SwapRequestService {
     }
 
     private void persistMockInspection(long id, PhotoUploadRequest request) {
-        SwapRequestEntity swapRequest = swapRequestRepository.findById(id)
-                .orElseThrow(() -> new NoSuchElementException("Swap request not found in DB: " + id));
+        SwapRequestEntity swapRequest = findSwapRequestEntity(id);
         String applianceType = valueOrDefault(request.applianceType(), swapRequest.getApplianceType());
         String modelName = mockModelName(applianceType);
 
@@ -601,6 +650,45 @@ public class SwapRequestService {
         ));
         swapRequest.changeStatus(SwapRequestStatus.PRE_VALUATION_READY.name());
         swapRequestRepository.save(swapRequest);
+    }
+
+    private void persistApplianceConfirmation(long id, UpdateApplianceRequest request) {
+        SwapRequestEntity swapRequest = findSwapRequestEntity(id);
+        ApplianceEntity appliance = applianceRepository.findBySwapRequest_Id(id)
+                .orElseGet(() -> applianceRepository.save(ApplianceEntity.create(swapRequest, swapRequest.getApplianceType())));
+        appliance.confirmByCustomer(
+                valueOrDefault(request.applianceType(), swapRequest.getApplianceType()),
+                valueOrDefault(request.brand(), "LG"),
+                valueOrDefault(request.modelName(), "Unknown"),
+                valueOrDefault(request.estimatedAge(), "확인 필요"),
+                valueOrDefault(request.exteriorCondition(), "확인 필요")
+        );
+        applianceRepository.save(appliance);
+        swapRequest.changeStatus(SwapRequestStatus.PRE_VALUATION_READY.name());
+        swapRequestRepository.save(swapRequest);
+    }
+
+    private PickupRequestEntity persistPickupRequest(
+            long id,
+            String pickupType,
+            String status,
+            java.time.LocalDate bookingDate,
+            String bookingTime,
+            String address,
+            String detailAddress,
+            Double pickupLat,
+            Double pickupLng
+    ) {
+        SwapRequestEntity swapRequest = findSwapRequestEntity(id);
+        PickupRequestEntity pickupRequest = pickupRequestRepository.findFirstBySwapRequest_IdOrderByCreatedAtDesc(id)
+                .orElseGet(() -> PickupRequestEntity.create(swapRequest));
+        pickupRequest.applyBooking(pickupType, status, bookingDate, bookingTime, address, detailAddress, pickupLat, pickupLng);
+        PickupRequestEntity savedPickupRequest = pickupRequestRepository.save(pickupRequest);
+        swapRequest.changeStatus("BOOKING".equals(pickupType)
+                ? SwapRequestStatus.BOOKING_CONFIRMED.name()
+                : SwapRequestStatus.INSTANT_CALL_REQUESTED.name());
+        swapRequestRepository.save(swapRequest);
+        return savedPickupRequest;
     }
 
     private static String mockModelName(String applianceType) {
@@ -630,34 +718,113 @@ public class SwapRequestService {
     }
 
     private UserEntity findOrCreateUser(CreateSwapRequestRequest request) {
+        String phoneNumber = UserService.formatPhoneNumber(request.phoneNumber());
         if (request.userId() != null) {
             UserEntity user = userRepository.findById(request.userId())
                     .orElseThrow(() -> new NoSuchElementException("User not found: " + request.userId()));
-            user.updateProfile(request.userName(), request.phoneNumber());
+            user.updateProfile(request.userName(), phoneNumber);
             return user;
         }
 
-        String thinqUserKey = UserService.toThinqUserKey(request.phoneNumber(), request.userName());
+        String thinqUserKey = UserService.toThinqUserKey(phoneNumber, request.userName());
         return userRepository.findByThinqUserKey(thinqUserKey)
                 .map(existingUser -> {
-                    existingUser.updateProfile(request.userName(), request.phoneNumber());
+                    existingUser.updateProfile(request.userName(), phoneNumber);
                     return existingUser;
                 })
-                .orElseGet(() -> UserEntity.create(thinqUserKey, request.userName(), request.phoneNumber()));
+                .orElseGet(() -> UserEntity.create(thinqUserKey, request.userName(), phoneNumber));
     }
     private SwapRequestState findState(long id) {
         SwapRequestState state = store.get(id);
-        if (state == null) {
-            throw new NoSuchElementException("Swap request not found: " + id);
+        if (state != null) {
+            return state;
         }
+
+        SwapRequestEntity swapRequest = findSwapRequestEntity(id);
+        return restoreState(swapRequest);
+    }
+
+    private SwapRequestResponse restoreAndRespond(SwapRequestEntity swapRequest) {
+        SwapRequestState state = restoreState(swapRequest);
+        enrichGpsContext(state);
+        return state.toResponse();
+    }
+
+    private SwapRequestState restoreState(SwapRequestEntity swapRequest) {
+        SwapRequestState existing = store.get(swapRequest.getId());
+        if (existing != null) {
+            return existing;
+        }
+
+        SwapRequestState state = new SwapRequestState(
+                swapRequest.getId(),
+                swapRequest.getUser().getId(),
+                swapRequest.getApplianceType()
+        );
+
+        Optional<ApplianceImageEntity> image = applianceImageRepository.findFirstBySwapRequest_IdOrderByUploadedAtDesc(swapRequest.getId());
+        image.ifPresent(applianceImage -> state.applyMockInspection(
+                applianceImage.getFileName(),
+                swapRequest.getApplianceType(),
+                applianceImage.getImageUrl(),
+                applianceImage.getFileName(),
+                null,
+                true
+        ));
+
+        applianceRepository.findBySwapRequest_Id(swapRequest.getId()).ifPresent(appliance -> state.updateAppliance(
+                appliance.getApplianceType(),
+                appliance.getBrand(),
+                appliance.getModelName(),
+                appliance.getEstimatedAge(),
+                appliance.getExteriorCondition()
+        ));
+
+        if (SwapRequestStatus.PRE_VALUATION_ACCEPTED.name().equals(swapRequest.getStatus())) {
+            state.acceptPreValuation();
+        }
+
+        pickupRequestRepository.findFirstBySwapRequest_IdOrderByCreatedAtDesc(swapRequest.getId())
+                .ifPresent(pickupRequest -> state.restorePickup(
+                        pickupRequest.getId(),
+                        pickupRequest.getPickupType(),
+                        pickupRequest.getStatus(),
+                        pickupRequest.getCrewId(),
+                        pickupRequest.getCrewName(),
+                        pickupRequest.getBookingDate(),
+                        pickupRequest.getBookingTime(),
+                        toLocalDateTime(pickupRequest.getCreatedAt()),
+                        pickupRequest.getAddress(),
+                        pickupRequest.getDetailAddress(),
+                        pickupRequest.getPickupLat(),
+                        pickupRequest.getPickupLng()
+                ));
+
+        store.put(state.getId(), state);
         return state;
     }
 
+    private SwapRequestEntity findSwapRequestEntity(long id) {
+        return swapRequestRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Swap request not found in DB: " + id));
+    }
+
+    private java.time.LocalDateTime toLocalDateTime(java.time.OffsetDateTime value) {
+        return value == null ? null : value.toLocalDateTime();
+    }
+
     private SwapRequestState findByPickupRequestId(long pickupRequestId) {
-        return store.values().stream()
-                .filter(state -> state.getPickupRequestId() != null && state.getPickupRequestId() == pickupRequestId)
-                .findFirst()
+        Optional<SwapRequestState> state = store.values().stream()
+                .filter(candidate -> candidate.getPickupRequestId() != null && candidate.getPickupRequestId() == pickupRequestId)
+                .findFirst();
+
+        if (state.isPresent()) {
+            return state.get();
+        }
+
+        PickupRequestEntity pickupRequest = pickupRequestRepository.findById(pickupRequestId)
                 .orElseThrow(() -> new NoSuchElementException("Pickup request not found: " + pickupRequestId));
+        return restoreState(pickupRequest.getSwapRequest());
     }
 
     private double distanceMeters(double lat1, double lng1, double lat2, double lng2) {
