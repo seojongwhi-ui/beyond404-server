@@ -846,13 +846,27 @@ public class SwapRequestService {
                 true
         ));
 
-        applianceRepository.findBySwapRequest_Id(swapRequest.getId()).ifPresent(appliance -> state.updateAppliance(
-                appliance.getApplianceType(),
-                appliance.getBrand(),
-                appliance.getModelName(),
-                appliance.getEstimatedAge(),
-                appliance.getExteriorCondition()
-        ));
+        applianceRepository.findBySwapRequest_Id(swapRequest.getId()).ifPresent(appliance -> {
+            String dbSizeGrade = null;
+            String dbSizeMetric = null;
+            if (appliance.getModelName() != null && !appliance.getModelName().isBlank()) {
+                Optional<ApplianceSpecEntity> spec = applianceSpecsRepository.findByModelNameIgnoreCase(appliance.getModelName());
+                if (spec.isPresent()) {
+                    dbSizeGrade = spec.get().getSizeGrade();
+                    dbSizeMetric = spec.get().buildSizeMetric();
+                }
+            }
+
+            state.updateAppliance(
+                    appliance.getApplianceType(),
+                    appliance.getBrand(),
+                    appliance.getModelName(),
+                    appliance.getEstimatedAge(),
+                    appliance.getExteriorCondition(),
+                    dbSizeGrade,
+                    dbSizeMetric
+            );
+        });
 
         if (SwapRequestStatus.PRE_VALUATION_ACCEPTED.name().equals(swapRequest.getStatus())) {
             state.acceptPreValuation();
