@@ -153,4 +153,18 @@ public class PickupRequestEntity {
     public OffsetDateTime getCreatedAt() {
         return createdAt;
     }
+
+    public void assignCrew(Long crewId, String crewName) {
+        this.crewId = crewId;
+        this.crewName = crewName;
+        this.status = "ASSIGNED";
+        this.matchedAt = OffsetDateTime.now();
+    }
+
+    public void updateStatus(String status) {
+        this.status = status;
+        if ("COMPLETED".equals(status)) {
+            this.completedAt = OffsetDateTime.now();
+        }
+    }
 }

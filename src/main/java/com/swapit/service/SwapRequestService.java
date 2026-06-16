@@ -35,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.time.LocalDate;
 import java.util.List;
@@ -320,25 +321,37 @@ public class SwapRequestService {
 
     @Transactional(readOnly = true)
     public List<SwapRequestResponse> getAvailableCalls() {
-        return pickupRequestRepository.findByStatusInOrderByCreatedAtDesc(List.of("REQUESTED", "CONFIRMED")).stream()
+        return pickupRequestRepository.findAll().stream()
                 .map(PickupRequestEntity::getSwapRequest)
                 .map(this::restoreAndRespond)
+                .filter(response -> hasPickupStatus(response, "REQUESTED", "CONFIRMED"))
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public List<SwapRequestResponse> getPendingCalls() {
-        return pickupRequestRepository.findByStatusInOrderByCreatedAtDesc(List.of("REQUESTED", "CONFIRMED")).stream()
+        return pickupRequestRepository.findAll().stream()
                 .map(PickupRequestEntity::getSwapRequest)
                 .map(this::restoreAndRespond)
+                .filter(response -> hasPickupStatus(response, "REQUESTED", "CONFIRMED"))
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public List<SwapRequestResponse> getActiveCalls() {
-        return pickupRequestRepository.findByStatusInOrderByCreatedAtDesc(List.of("ASSIGNED", "IN_PROGRESS", "ARRIVED")).stream()
+        return pickupRequestRepository.findAll().stream()
                 .map(PickupRequestEntity::getSwapRequest)
                 .map(this::restoreAndRespond)
+                .filter(response -> hasPickupStatus(response, "ASSIGNED", "IN_PROGRESS", "ARRIVED"))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<SwapRequestResponse> getCompletedCalls() {
+        return pickupRequestRepository.findAll().stream()
+                .map(PickupRequestEntity::getSwapRequest)
+                .map(this::restoreAndRespond)
+                .filter(response -> hasPickupStatus(response, "COMPLETED"))
                 .toList();
     }
 
@@ -351,19 +364,27 @@ public class SwapRequestService {
         return List.copyOf(locationHistoryStore.getOrDefault(pickupRequestId, List.of()));
     }
 
+    @Transactional
     public SwapRequestResponse acceptCall(long pickupRequestId) {
         SwapRequestState state = findByPickupRequestId(pickupRequestId);
+        PickupRequestEntity pickupRequest = pickupRequestRepository.findById(pickupRequestId)
+                .orElseThrow(() -> new IllegalArgumentException("Pickup request not found: " + pickupRequestId));
         CrewGpsState assignedCrew = crewGpsStore.getOrDefault(DEMO_CREW_ID, new CrewGpsState(DEMO_CREW_ID, DEMO_CREW_NAME, 37.5665, 126.9780, "AVAILABLE"));
         assignedCrew.status = "ASSIGNED";
         state.acceptByCrew(DEMO_CREW_ID, assignedCrew.crewName, DEMO_CREW_PHOTO, DEMO_CREW_RATING, DEMO_CREW_REVIEW_SUMMARY);
         state.updateCrewLocation(assignedCrew.lat, assignedCrew.lng, assignedCrew.heading, assignedCrew.speed);
+        pickupRequest.assignCrew(DEMO_CREW_ID, assignedCrew.crewName);
         appendLocationHistory(pickupRequestId, assignedCrew.lat, assignedCrew.lng, assignedCrew.heading, assignedCrew.speed);
         return buildResponse(state);
     }
 
+    @Transactional
     public SwapRequestResponse depart(long pickupRequestId) {
         SwapRequestState state = findByPickupRequestId(pickupRequestId);
+        PickupRequestEntity pickupRequest = pickupRequestRepository.findById(pickupRequestId)
+                .orElseThrow(() -> new IllegalArgumentException("Pickup request not found: " + pickupRequestId));
         state.departCrew();
+        pickupRequest.updateStatus("IN_PROGRESS");
         return buildResponse(state);
     }
 
@@ -397,20 +418,28 @@ public class SwapRequestService {
         return buildResponse(state);
     }
 
+    @Transactional
     public SwapRequestResponse arrive(long pickupRequestId) {
         SwapRequestState state = findByPickupRequestId(pickupRequestId);
+        PickupRequestEntity pickupRequest = pickupRequestRepository.findById(pickupRequestId)
+                .orElseThrow(() -> new IllegalArgumentException("Pickup request not found: " + pickupRequestId));
         state.arriveCrew();
+        pickupRequest.updateStatus("ARRIVED");
         return buildResponse(state);
     }
 
+    @Transactional
     public SwapRequestResponse completePickup(long pickupRequestId, CrewCompletePickupRequest request) {
         SwapRequestState state = findByPickupRequestId(pickupRequestId);
+        PickupRequestEntity pickupRequest = pickupRequestRepository.findById(pickupRequestId)
+                .orElseThrow(() -> new IllegalArgumentException("Pickup request not found: " + pickupRequestId));
         state.completePickup(
                 request.pickupPhotoFileName(),
                 request.hubPhotoFileName(),
                 request.inspectionMemo(),
                 request.hubMemo()
         );
+        pickupRequest.updateStatus("COMPLETED");
 
         Long crewId = state.getCrewId() == null ? DEMO_CREW_ID : state.getCrewId();
         CrewGpsState crewState = crewGpsStore.get(crewId);
@@ -913,6 +942,15 @@ public class SwapRequestService {
         PickupRequestEntity pickupRequest = pickupRequestRepository.findById(pickupRequestId)
                 .orElseThrow(() -> new NoSuchElementException("Pickup request not found: " + pickupRequestId));
         return restoreState(pickupRequest.getSwapRequest());
+    }
+
+    private boolean hasPickupStatus(SwapRequestResponse response, String... statuses) {
+        if (response.pickupRequest() == null || response.pickupRequest().status() == null) {
+            return false;
+        }
+
+        return Arrays.stream(statuses)
+                .anyMatch(status -> status.equals(response.pickupRequest().status()));
     }
 
     private double distanceMeters(double lat1, double lng1, double lat2, double lng2) {
