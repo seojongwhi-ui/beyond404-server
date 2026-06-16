@@ -39,6 +39,4 @@ out/
 ### Local dev ###
 dev-server.log
 *.log
-.env
 .env.local
-.env.*.local
