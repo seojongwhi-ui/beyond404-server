@@ -47,6 +47,11 @@ public class CrewController {
         return swapRequestService.getActiveCalls();
     }
 
+    @GetMapping("/calls/completed")
+    public List<SwapRequestResponse> getCompletedCalls() {
+        return swapRequestService.getCompletedCalls();
+    }
+
     @GetMapping("/calls/{pickupRequestId:\\d+}")
     public SwapRequestResponse getCallDetail(@PathVariable long pickupRequestId) {
         return swapRequestService.getCrewCallDetail(pickupRequestId);
