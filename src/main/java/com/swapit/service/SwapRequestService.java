@@ -127,26 +127,34 @@ public class SwapRequestService {
     public SwapRequestResponse analyzePhoto(long id, PhotoUploadRequest request) {
         SwapRequestState state = findState(id);
         SwapRequestEntity swapRequest = findSwapRequestEntity(id);
-        String applianceType = valueOrDefault(request.applianceType(), swapRequest.getApplianceType());
-        OpenAiVisionService.OpenAiVisionResult visionResult = identifyAppliance(request.imageUrl(), applianceType);
-        ApplianceSizeDetails applianceSizeDetails = resolveApplianceSizeDetails(visionResult.modelName());
+        String requestedApplianceType = valueOrDefault(request.applianceType(), swapRequest.getApplianceType());
+        String labelImageUrl = firstKnown(request.labelImageUrl(), request.imageUrl());
+        String exteriorImageUrl = firstKnown(request.exteriorImageUrl(), request.imageUrl());
+        OpenAiVisionService.OpenAiVisionResult labelResult = identifyAppliance(labelImageUrl, requestedApplianceType);
+        OpenAiVisionService.OpenAiConditionResult conditionResult = analyzeCondition(exteriorImageUrl, requestedApplianceType);
+        String applianceType = preferKnown(labelResult.applianceType(), requestedApplianceType);
+        String brand = preferKnown(labelResult.brand(), request.brand());
+        String modelName = preferKnown(labelResult.modelName(), request.modelName());
+        String estimatedAge = preferKnown(conditionResult.estimatedAge(), request.estimatedAge());
+        String exteriorCondition = preferKnown(conditionResult.exteriorCondition(), request.exteriorCondition());
+        ApplianceSizeDetails applianceSizeDetails = resolveApplianceSizeDetails(modelName);
 
         state.applyPhotoInspection(
                 request.fileName(),
                 applianceType,
-                request.imageUrl(),
+                exteriorImageUrl,
                 request.exteriorPhotoFileName(),
                 request.labelPhotoFileName(),
                 request.agreedToCreditPolicy()
         );
         state.applyVisionIdentification(
                 applianceType,
-                visionResult.brand(),
-                visionResult.modelName(),
+                brand,
+                modelName,
                 applianceSizeDetails.sizeGrade(),
                 applianceSizeDetails.sizeMetric()
         );
-        persistVisionInspection(id, request, visionResult);
+        persistVisionInspection(id, request, applianceType, brand, modelName, estimatedAge, exteriorCondition, exteriorImageUrl);
         return buildResponse(state);
     }
 
@@ -882,18 +890,27 @@ public class SwapRequestService {
         );
     }
 
-    private void persistVisionInspection(long id, PhotoUploadRequest request, OpenAiVisionService.OpenAiVisionResult visionResult) {
+    private void persistVisionInspection(
+            long id,
+            PhotoUploadRequest request,
+            String applianceType,
+            String brand,
+            String modelName,
+            String estimatedAge,
+            String exteriorCondition,
+            String exteriorImageUrl
+    ) {
         SwapRequestEntity swapRequest = findSwapRequestEntity(id);
-        String applianceType = valueOrDefault(request.applianceType(), swapRequest.getApplianceType());
+        String finalApplianceType = valueOrDefault(applianceType, swapRequest.getApplianceType());
 
         ApplianceEntity appliance = applianceRepository.findBySwapRequest_Id(id)
-                .orElseGet(() -> applianceRepository.save(ApplianceEntity.create(swapRequest, applianceType)));
+                .orElseGet(() -> applianceRepository.save(ApplianceEntity.create(swapRequest, finalApplianceType)));
         appliance.applyPhotoInspection(
-                applianceType,
-                visionResult.brand(),
-                visionResult.modelName(),
-                "1-3 years",
-                "Visible signs of use"
+                finalApplianceType,
+                valueOrDefault(brand, "unknown"),
+                valueOrDefault(modelName, "unknown"),
+                valueOrDefault(estimatedAge, "확인 필요"),
+                valueOrDefault(exteriorCondition, "외관 상태 확인 필요")
         );
         applianceRepository.save(appliance);
 
@@ -901,7 +918,7 @@ public class SwapRequestService {
                 swapRequest,
                 appliance,
                 request.fileName(),
-                request.imageUrl()
+                valueOrDefault(exteriorImageUrl, request.imageUrl())
         ));
 
         valuationRepository.save(ValuationEntity.preValuation(
@@ -917,6 +934,23 @@ public class SwapRequestService {
     private OpenAiVisionService.OpenAiVisionResult identifyAppliance(String imageUrl, String applianceType) {
         return openAiVisionService.identifyAppliance(imageUrl, applianceType)
                 .orElseGet(OpenAiVisionService.OpenAiVisionResult::unknown);
+    }
+
+    private OpenAiVisionService.OpenAiConditionResult analyzeCondition(String imageUrl, String applianceType) {
+        return openAiVisionService.analyzeCondition(imageUrl, applianceType)
+                .orElseGet(OpenAiVisionService.OpenAiConditionResult::empty);
+    }
+
+    private static String firstKnown(String primary, String fallback) {
+        return isKnown(primary) ? primary : fallback;
+    }
+
+    private static String preferKnown(String candidate, String fallback) {
+        return isKnown(candidate) ? candidate : fallback;
+    }
+
+    private static boolean isKnown(String value) {
+        return value != null && !value.isBlank() && !"unknown".equalsIgnoreCase(value.trim()) && !"null".equalsIgnoreCase(value.trim());
     }
 
     private ApplianceSizeDetails resolveApplianceSizeDetails(String modelName) {

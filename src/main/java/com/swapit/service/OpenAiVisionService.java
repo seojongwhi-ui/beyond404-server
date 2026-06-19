@@ -46,32 +46,7 @@ public class OpenAiVisionService {
         }
 
         try {
-            Optional<String> resolvedImageUrl = resolveVisionImageUrl(imageReference);
-            if (resolvedImageUrl.isEmpty()) {
-                log.info("No readable image URL or local image file was provided. Appliance identification will remain unknown.");
-                return Optional.empty();
-            }
-
-            HttpRequest request = HttpRequest.newBuilder(URI.create(CHAT_COMPLETIONS_ENDPOINT))
-                    .timeout(Duration.ofSeconds(30))
-                    .header("Authorization", "Bearer " + apiKey)
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(buildRequestBody(resolvedImageUrl.get(), applianceType)))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                log.warn("OpenAI Vision API failed with status {} and body {}", response.statusCode(), response.body());
-                return Optional.empty();
-            }
-
-            String content = objectMapper.readTree(response.body())
-                    .path("choices")
-                    .path(0)
-                    .path("message")
-                    .path("content")
-                    .asText("");
-
+            String content = callVision(imageReference, buildLabelPrompt(applianceType), "appliance label");
             return Optional.of(parseResult(content));
         } catch (IOException | InterruptedException | IllegalArgumentException error) {
             if (error instanceof InterruptedException) {
@@ -82,16 +57,55 @@ public class OpenAiVisionService {
         }
     }
 
-    private String buildRequestBody(String imageUrl, String applianceType) throws IOException {
+    public Optional<OpenAiConditionResult> analyzeCondition(String imageReference, String applianceType) {
+        if (apiKey == null || apiKey.isBlank()) {
+            log.info("OPENAI_API_KEY is not configured. Appliance condition analysis will remain unchanged.");
+            return Optional.empty();
+        }
+
+        try {
+            String content = callVision(imageReference, buildConditionPrompt(applianceType), "appliance exterior");
+            return Optional.of(parseConditionResult(content));
+        } catch (IOException | InterruptedException | IllegalArgumentException error) {
+            if (error instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            log.warn("Failed to analyze appliance condition with OpenAI Vision. Appliance condition will remain unchanged.", error);
+            return Optional.empty();
+        }
+    }
+
+    private String callVision(String imageReference, String prompt, String context) throws IOException, InterruptedException {
+        Optional<String> resolvedImageUrl = resolveVisionImageUrl(imageReference);
+        if (resolvedImageUrl.isEmpty()) {
+            throw new IllegalArgumentException("No readable image URL or local image file was provided for " + context + ".");
+        }
+
+        HttpRequest request = HttpRequest.newBuilder(URI.create(CHAT_COMPLETIONS_ENDPOINT))
+                .timeout(Duration.ofSeconds(30))
+                .header("Authorization", "Bearer " + apiKey)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(buildRequestBody(resolvedImageUrl.get(), prompt)))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            log.warn("OpenAI Vision API failed for {} with status {} and body {}", context, response.statusCode(), response.body());
+            throw new IllegalArgumentException("OpenAI Vision API failed with status " + response.statusCode());
+        }
+
+        return objectMapper.readTree(response.body())
+                .path("choices")
+                .path(0)
+                .path("message")
+                .path("content")
+                .asText("");
+    }
+
+    private String buildRequestBody(String imageUrl, String prompt) throws IOException {
         Map<String, Object> textContent = new LinkedHashMap<>();
         textContent.put("type", "text");
-        textContent.put("text", """
-                Find the appliance brand and exact model name from this image.
-                Appliance type hint: %s.
-                Reply only with valid JSON in this shape:
-                {"brand":"brand","modelName":"model"}
-                If you cannot determine either field, use "unknown" for that field.
-                """.formatted(valueOrDefault(applianceType, "unknown")));
+        textContent.put("text", prompt);
 
         Map<String, Object> imageUrlContent = new LinkedHashMap<>();
         imageUrlContent.put("type", "image_url");
@@ -110,14 +124,47 @@ public class OpenAiVisionService {
         return objectMapper.writeValueAsString(body);
     }
 
+    private String buildLabelPrompt(String applianceType) {
+        return """
+                This is a label or sticker photo attached to an appliance.
+                Extract only text that is visible in the image and reply only with valid JSON:
+                {"brand":"brand name or null","modelName":"exact model name using original letters and numbers or null","applianceType":"washing_machine | refrigerator | air_conditioner | microwave | tv | null"}
+                Appliance type hint: %s.
+                If the model name is unreadable, return null for modelName. Do not invent model codes.
+                """.formatted(valueOrDefault(applianceType, "unknown"));
+    }
+
+    private String buildConditionPrompt(String applianceType) {
+        return """
+                This is an exterior photo of an appliance.
+                Analyze only the visible exterior condition and reply only with valid JSON:
+                {"estimatedAge":"0-1년 | 1-3년 | 2-4년 | 4-6년 | 6년 이상 중 하나","exteriorCondition":"외관 상태를 한국어 한 문장으로 설명"}
+                Appliance type hint: %s.
+                If age cannot be estimated, return null for estimatedAge.
+                """.formatted(valueOrDefault(applianceType, "unknown"));
+    }
+
     OpenAiVisionResult parseResult(String content) throws IOException {
         String json = extractJsonObject(content);
         JsonNode root = objectMapper.readTree(json);
         String brand = normalizeResultField(root.path("brand").asText(""));
         String modelName = normalizeResultField(root.path("modelName").asText(""));
+        String applianceType = normalizeResultField(root.path("applianceType").asText(""));
         return new OpenAiVisionResult(
                 valueOrDefault(brand, "unknown"),
-                valueOrDefault(modelName, "unknown")
+                valueOrDefault(modelName, "unknown"),
+                valueOrDefault(applianceType, null)
+        );
+    }
+
+    OpenAiConditionResult parseConditionResult(String content) throws IOException {
+        String json = extractJsonObject(content);
+        JsonNode root = objectMapper.readTree(json);
+        String estimatedAge = normalizeResultField(root.path("estimatedAge").asText(""));
+        String exteriorCondition = normalizeResultField(root.path("exteriorCondition").asText(""));
+        return new OpenAiConditionResult(
+                valueOrDefault(estimatedAge, null),
+                valueOrDefault(exteriorCondition, null)
         );
     }
 
@@ -170,9 +217,15 @@ public class OpenAiVisionService {
         return value == null || value.isBlank() ? fallback : value;
     }
 
-    public record OpenAiVisionResult(String brand, String modelName) {
+    public record OpenAiVisionResult(String brand, String modelName, String applianceType) {
         public static OpenAiVisionResult unknown() {
-            return new OpenAiVisionResult("unknown", "unknown");
+            return new OpenAiVisionResult("unknown", "unknown", null);
+        }
+    }
+
+    public record OpenAiConditionResult(String estimatedAge, String exteriorCondition) {
+        public static OpenAiConditionResult empty() {
+            return new OpenAiConditionResult(null, null);
         }
     }
 }

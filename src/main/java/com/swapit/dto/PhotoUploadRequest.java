@@ -7,7 +7,13 @@ public record PhotoUploadRequest(
         String exteriorPhotoFileName,
         String labelPhotoFileName,
         String imageUrl,
+        String exteriorImageUrl,
+        String labelImageUrl,
         String applianceType,
+        String brand,
+        String modelName,
+        String estimatedAge,
+        String exteriorCondition,
         Boolean agreedToCreditPolicy
 ) {
 }
