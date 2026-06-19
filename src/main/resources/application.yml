@@ -30,4 +30,8 @@ kakao:
   mobility:
     rest-api-key: ${KAKAO_REST_API_KEY:}
 
+openai:
+  api-key: ${OPENAI_API_KEY:}
+  vision-model: ${OPENAI_VISION_MODEL:gpt-4o}
+
 

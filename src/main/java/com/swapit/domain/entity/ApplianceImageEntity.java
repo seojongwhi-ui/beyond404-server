@@ -34,7 +34,7 @@ public class ApplianceImageEntity {
     @Column(name = "file_name", nullable = false, length = 255)
     private String fileName;
 
-    @Column(name = "image_url")
+    @Column(name = "image_url", columnDefinition = "TEXT")
     private String imageUrl;
 
     @Column(name = "storage_key", length = 255)
@@ -52,7 +52,7 @@ public class ApplianceImageEntity {
         this.imageType = "CUSTOMER_CAPTURE";
         this.fileName = fileName;
         this.imageUrl = imageUrl;
-        this.storageKey = imageUrl;
+        this.storageKey = imageUrl == null || imageUrl.length() <= 255 ? imageUrl : fileName;
         this.uploadedAt = OffsetDateTime.now();
     }
 

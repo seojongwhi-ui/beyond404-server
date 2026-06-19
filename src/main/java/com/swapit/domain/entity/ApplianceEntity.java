@@ -68,7 +68,7 @@ public class ApplianceEntity {
         return new ApplianceEntity(swapRequest, applianceType);
     }
 
-    public void applyMockInspection(
+    public void applyPhotoInspection(
             String applianceType,
             String brand,
             String modelName,
@@ -90,7 +90,7 @@ public class ApplianceEntity {
             String estimatedAge,
             String exteriorCondition
     ) {
-        applyMockInspection(applianceType, brand, modelName, estimatedAge, exteriorCondition);
+        applyPhotoInspection(applianceType, brand, modelName, estimatedAge, exteriorCondition);
         this.confirmedByCustomer = true;
     }
     public Long getId() {

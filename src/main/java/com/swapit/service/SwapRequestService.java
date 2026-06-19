@@ -76,6 +76,7 @@ public class SwapRequestService {
     private final CrewLocationProcessor crewLocationProcessor;
     private final PickupRequestRepository pickupRequestRepository;
     private final CrewReviewRepository crewReviewRepository;
+    private final OpenAiVisionService openAiVisionService;
 
     private final AtomicLong sequence = new AtomicLong(1);
     private final Map<Long, SwapRequestState> store = new ConcurrentHashMap<>();
@@ -83,8 +84,8 @@ public class SwapRequestService {
     private final Map<Long, List<SwapRequestResponse.LocationHistoryPoint>> locationHistoryStore = new ConcurrentHashMap<>();
     private final Map<Long, CachedRoute> routeCacheStore = new ConcurrentHashMap<>();
     private final List<SwapRequestResponse.LocationPoint> processingCenters = List.of(
-            new SwapRequestResponse.LocationPoint("?쒖슱 ?쒕? e-waste ?덈툕", 37.5481, 126.8914),
-            new SwapRequestResponse.LocationPoint("?쒖슱 ?숇? e-waste ?덈툕", 37.5457, 127.1427)
+            new SwapRequestResponse.LocationPoint("LG사이언스파크 마곡", 37.562475, 126.831166),
+            new SwapRequestResponse.LocationPoint("LG전자 창원 성산 허브", 35.202531, 128.677344)
     );
     private final List<String> bookingTimeSlots = List.of(
             "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
@@ -125,15 +126,27 @@ public class SwapRequestService {
     @Transactional
     public SwapRequestResponse analyzePhoto(long id, PhotoUploadRequest request) {
         SwapRequestState state = findState(id);
-        state.applyMockInspection(
+        SwapRequestEntity swapRequest = findSwapRequestEntity(id);
+        String applianceType = valueOrDefault(request.applianceType(), swapRequest.getApplianceType());
+        OpenAiVisionService.OpenAiVisionResult visionResult = identifyAppliance(request.imageUrl(), applianceType);
+        ApplianceSizeDetails applianceSizeDetails = resolveApplianceSizeDetails(visionResult.modelName());
+
+        state.applyPhotoInspection(
                 request.fileName(),
-                request.applianceType(),
+                applianceType,
                 request.imageUrl(),
                 request.exteriorPhotoFileName(),
                 request.labelPhotoFileName(),
                 request.agreedToCreditPolicy()
         );
-        persistMockInspection(id, request);
+        state.applyVisionIdentification(
+                applianceType,
+                visionResult.brand(),
+                visionResult.modelName(),
+                applianceSizeDetails.sizeGrade(),
+                applianceSizeDetails.sizeMetric()
+        );
+        persistVisionInspection(id, request, visionResult);
         return buildResponse(state);
     }
 
@@ -869,14 +882,19 @@ public class SwapRequestService {
         );
     }
 
-    private void persistMockInspection(long id, PhotoUploadRequest request) {
+    private void persistVisionInspection(long id, PhotoUploadRequest request, OpenAiVisionService.OpenAiVisionResult visionResult) {
         SwapRequestEntity swapRequest = findSwapRequestEntity(id);
         String applianceType = valueOrDefault(request.applianceType(), swapRequest.getApplianceType());
-        String modelName = mockModelName(applianceType);
 
         ApplianceEntity appliance = applianceRepository.findBySwapRequest_Id(id)
                 .orElseGet(() -> applianceRepository.save(ApplianceEntity.create(swapRequest, applianceType)));
-        appliance.applyMockInspection(applianceType, "LG", modelName, "1-3 years", "Visible signs of use");
+        appliance.applyPhotoInspection(
+                applianceType,
+                visionResult.brand(),
+                visionResult.modelName(),
+                "1-3 years",
+                "Visible signs of use"
+        );
         applianceRepository.save(appliance);
 
         applianceImageRepository.save(ApplianceImageEntity.customerCapture(
@@ -890,10 +908,25 @@ public class SwapRequestService {
                 swapRequest,
                 1500,
                 2400,
-                "?ъ쭊 湲곕컲 Mock VLM 遺꾩꽍 寃곌낵濡??곗젙???덉긽 蹂댁긽媛?낅땲??"
+                "OpenAI GPT-4o Vision photo analysis result was used for the preliminary valuation."
         ));
         swapRequest.changeStatus(SwapRequestStatus.PRE_VALUATION_READY.name());
         swapRequestRepository.save(swapRequest);
+    }
+
+    private OpenAiVisionService.OpenAiVisionResult identifyAppliance(String imageUrl, String applianceType) {
+        return openAiVisionService.identifyAppliance(imageUrl, applianceType)
+                .orElseGet(OpenAiVisionService.OpenAiVisionResult::unknown);
+    }
+
+    private ApplianceSizeDetails resolveApplianceSizeDetails(String modelName) {
+        if (modelName == null || modelName.isBlank()) {
+            return new ApplianceSizeDetails(null, null);
+        }
+
+        return applianceSpecsRepository.findByModelNameIgnoreCase(modelName)
+                .map(spec -> new ApplianceSizeDetails(spec.getSizeGrade(), spec.buildSizeMetric()))
+                .orElseGet(() -> new ApplianceSizeDetails(null, null));
     }
 
     private void persistApplianceConfirmation(long id, UpdateApplianceRequest request) {
@@ -935,15 +968,6 @@ public class SwapRequestService {
         return savedPickupRequest;
     }
 
-    private static String mockModelName(String applianceType) {
-        return switch (valueOrDefault(applianceType, "washing_machine")) {
-            case "refrigerator" -> "GL-T422VPZX";
-            case "air_conditioner" -> "US-Q19BNZE3";
-            case "tv" -> "OLED55C4";
-            case "microwave" -> "MH8265DIS";
-            default -> "FHP1411Z9P";
-        };
-    }
     private SwapRequestState createPersistentState(CreateSwapRequestRequest request) {
         String applianceType = valueOrDefault(request.applianceType(), "washing_machine");
 
@@ -1007,7 +1031,7 @@ public class SwapRequestService {
         );
 
         Optional<ApplianceImageEntity> image = applianceImageRepository.findFirstBySwapRequest_IdOrderByUploadedAtDesc(swapRequest.getId());
-        image.ifPresent(applianceImage -> state.applyMockInspection(
+        image.ifPresent(applianceImage -> state.applyPhotoInspection(
                 applianceImage.getFileName(),
                 swapRequest.getApplianceType(),
                 applianceImage.getImageUrl(),
@@ -1132,6 +1156,12 @@ public class SwapRequestService {
     private record CachedRoute(
             SwapRequestResponse.RoutePoint destination,
             SwapRequestResponse.RouteSummary route
+    ) {
+    }
+
+    private record ApplianceSizeDetails(
+            String sizeGrade,
+            String sizeMetric
     ) {
     }
 

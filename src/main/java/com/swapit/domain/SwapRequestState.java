@@ -111,8 +111,8 @@ public class SwapRequestState {
         this.customerId = customerId;
         this.status = SwapRequestStatus.CREATED;
         this.applianceType = valueOrDefault(applianceType, "washing_machine");
-        this.brand = "LG";
-        this.modelName = mockModelName(this.applianceType);
+        this.brand = "unknown";
+        this.modelName = "unknown";
         this.estimatedAge = "3-5년";
         this.exteriorCondition = "외관 확인 필요";
         this.conditionGrade = "unknown";
@@ -158,7 +158,7 @@ public class SwapRequestState {
         return pickupLng;
     }
 
-    public void applyMockInspection(
+    public void applyPhotoInspection(
             String fileName,
             String requestedApplianceType,
             String imageUrl,
@@ -177,8 +177,8 @@ public class SwapRequestState {
             this.applianceType = requestedApplianceType;
         }
 
-        this.brand = "LG";
-        this.modelName = mockModelName(this.applianceType);
+        this.brand = "unknown";
+        this.modelName = "unknown";
         this.estimatedAge = mockEstimatedAge(this.applianceType);
         this.exteriorCondition = mockCondition(this.applianceType);
         this.conditionGrade = "good";
@@ -223,6 +223,28 @@ public class SwapRequestState {
         this.minEstimatedValue = this.estimatedFinalCredit;
         this.maxEstimatedValue = this.estimatedFinalCredit;
         addTrackingEvent("APPLIANCE_CONFIRMED", "AI 인식 결과 확인 및 수정 완료");
+    }
+
+    public void applyVisionIdentification(
+            String applianceType,
+            String brand,
+            String modelName,
+            String dbSizeGrade,
+            String dbSizeMetric
+    ) {
+        this.applianceType = valueOrDefault(applianceType, this.applianceType);
+        this.brand = valueOrDefault(brand, this.brand);
+        this.modelName = valueOrDefault(modelName, this.modelName);
+        if (dbSizeGrade != null && !dbSizeGrade.isBlank()) {
+            this.applianceSizeGrade = dbSizeGrade;
+        }
+        this.applianceSizeMetric = (dbSizeMetric != null && !dbSizeMetric.isBlank())
+                ? dbSizeMetric
+                : defaultSizeMetric(this.applianceType);
+        this.scrapValue = scrapValueFor(this.applianceType, this.applianceSizeGrade);
+        this.estimatedFinalCredit = this.scrapValue;
+        this.minEstimatedValue = this.estimatedFinalCredit;
+        this.maxEstimatedValue = this.estimatedFinalCredit;
     }
 
     public void acceptPreValuation() {
@@ -879,17 +901,6 @@ public class SwapRequestState {
 
     private static String valueOrDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
-    }
-
-    private static String mockModelName(String applianceType) {
-        return switch (valueOrDefault(applianceType, "washing_machine")) {
-            case "refrigerator" -> "DIOS R-T872";
-            case "air_conditioner" -> "Whisen SQ07";
-            case "tv" -> "OLED55C4";
-            case "microwave" -> "MW23L";
-            case "air_purifier" -> "PuriCare AS181";
-            default -> "Tromm F13";
-        };
     }
 
     private static String mockEstimatedAge(String applianceType) {
