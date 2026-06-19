@@ -2,6 +2,7 @@ package com.swapit.controller;
 
 import com.swapit.dto.BookingRequest;
 import com.swapit.dto.BookingAvailabilityResponse;
+import com.swapit.dto.ApplianceSpecLookupResponse;
 import com.swapit.dto.CrewReviewRequest;
 import com.swapit.dto.CreateInstantCallRequest;
 import com.swapit.dto.CreateSwapRequestRequest;
@@ -52,6 +53,13 @@ public class SwapRequestController {
     @GetMapping("/booking-availability")
     public BookingAvailabilityResponse getBookingAvailability(@RequestParam LocalDate date) {
         return swapRequestService.getBookingAvailability(date);
+    }
+
+    @GetMapping("/appliance-specs/lookup")
+    public ResponseEntity<ApplianceSpecLookupResponse> lookupApplianceSpec(@RequestParam String modelName) {
+        return swapRequestService.lookupApplianceSpec(modelName)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @PostMapping("/{id}/photos")

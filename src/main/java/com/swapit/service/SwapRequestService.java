@@ -11,6 +11,7 @@ import com.swapit.domain.entity.ValuationEntity;
 import com.swapit.domain.enums.SwapRequestStatus;
 import com.swapit.dto.BookingRequest;
 import com.swapit.dto.BookingAvailabilityResponse;
+import com.swapit.dto.ApplianceSpecLookupResponse;
 import com.swapit.dto.CrewReviewRequest;
 import com.swapit.dto.CrewCompletePickupRequest;
 import com.swapit.dto.CrewLocationRequest;
@@ -245,6 +246,20 @@ public class SwapRequestService {
                 .toList();
 
         return new BookingAvailabilityResponse(date, slots);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<ApplianceSpecLookupResponse> lookupApplianceSpec(String modelName) {
+        return applianceSpecsRepository.findByModelNameIgnoreCase(modelName)
+                .or(() -> findSpecByNormalizedModelName(modelName))
+                .map(spec -> new ApplianceSpecLookupResponse(
+                        spec.getBrand(),
+                        spec.getApplianceType(),
+                        displayModelName(modelName, spec.getModelName()),
+                        spec.getSizeGrade(),
+                        spec.buildSizeMetric(),
+                        spec.getWeightKg()
+                ));
     }
 
     @Transactional
