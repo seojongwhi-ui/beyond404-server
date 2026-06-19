@@ -47,7 +47,14 @@ public class OpenAiVisionService {
 
         try {
             String content = callVision(imageReference, buildLabelPrompt(applianceType), "appliance label");
-            return Optional.of(parseResult(content));
+            OpenAiVisionResult result = parseResult(content);
+            log.info(
+                    "OpenAI Vision label result: brand={}, modelName={}, applianceType={}",
+                    safeLogValue(result.brand()),
+                    safeLogValue(result.modelName()),
+                    safeLogValue(result.applianceType())
+            );
+            return Optional.of(result);
         } catch (IOException | InterruptedException | IllegalArgumentException error) {
             if (error instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
@@ -120,6 +127,7 @@ public class OpenAiVisionService {
         body.put("messages", List.of(message));
         body.put("max_tokens", 200);
         body.put("temperature", 0);
+        body.put("response_format", Map.of("type", "json_object"));
 
         return objectMapper.writeValueAsString(body);
     }
@@ -127,10 +135,11 @@ public class OpenAiVisionService {
     private String buildLabelPrompt(String applianceType) {
         return """
                 This is a label or sticker photo attached to an appliance.
-                Extract only text that is visible in the image and reply only with valid JSON:
-                {"brand":"brand name or null","modelName":"exact model name using original letters and numbers or null","applianceType":"washing_machine | refrigerator | air_conditioner | microwave | tv | null"}
+                Read the printed/OCR text carefully and reply only with valid JSON:
+                {"brand":"brand name or null","modelName":"exact model code using visible letters, numbers, hyphens or slashes only or null","applianceType":"washing_machine | refrigerator | air_conditioner | microwave | tv | null"}
                 Appliance type hint: %s.
-                If the model name is unreadable, return null for modelName. Do not invent model codes.
+                Prefer fields labelled model, model name, model no, model code, 모델명, 형명, 품명, or 제품명.
+                Do not invent model codes. If unreadable, return null for modelName.
                 """.formatted(valueOrDefault(applianceType, "unknown"));
     }
 
@@ -147,9 +156,22 @@ public class OpenAiVisionService {
     OpenAiVisionResult parseResult(String content) throws IOException {
         String json = extractJsonObject(content);
         JsonNode root = objectMapper.readTree(json);
-        String brand = normalizeResultField(root.path("brand").asText(""));
-        String modelName = normalizeResultField(root.path("modelName").asText(""));
-        String applianceType = normalizeResultField(root.path("applianceType").asText(""));
+        String brand = firstJsonText(root, "brand", "manufacturer", "maker", "company");
+        String modelName = firstJsonText(
+                root,
+                "modelName",
+                "model_name",
+                "model",
+                "modelNo",
+                "model_no",
+                "modelNumber",
+                "model_number",
+                "modelCode",
+                "model_code",
+                "productModel",
+                "product_model"
+        );
+        String applianceType = firstJsonText(root, "applianceType", "appliance_type", "type", "category");
         return new OpenAiVisionResult(
                 valueOrDefault(brand, "unknown"),
                 valueOrDefault(modelName, "unknown"),
@@ -210,7 +232,28 @@ public class OpenAiVisionService {
     }
 
     private String normalizeResultField(String value) {
-        return value == null ? "" : value.trim();
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.trim();
+        if ("null".equalsIgnoreCase(trimmed) || "unknown".equalsIgnoreCase(trimmed) || "n/a".equalsIgnoreCase(trimmed)) {
+            return "";
+        }
+        return trimmed;
+    }
+
+    private String firstJsonText(JsonNode root, String... fieldNames) {
+        for (String fieldName : fieldNames) {
+            String value = normalizeResultField(root.path(fieldName).asText(""));
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private String safeLogValue(String value) {
+        return value == null || value.isBlank() ? "-" : value;
     }
 
     private String valueOrDefault(String value, String fallback) {
