@@ -79,6 +79,7 @@ public class SwapRequestService {
     private final PickupRequestRepository pickupRequestRepository;
     private final CrewReviewRepository crewReviewRepository;
     private final OpenAiVisionService openAiVisionService;
+    private final CrewSettlementCalculator crewSettlementCalculator;
 
     private final AtomicLong sequence = new AtomicLong(1);
     private final Map<Long, SwapRequestState> store = new ConcurrentHashMap<>();
@@ -299,7 +300,7 @@ public class SwapRequestService {
                 pickupRequest.getPickupLng()
         );
         enrichGpsContext(state);
-        return state.toResponse();
+        return buildResponse(state);
     }
 
     @Transactional
@@ -332,7 +333,7 @@ public class SwapRequestService {
                 pickupRequest.getPickupLng()
         );
         enrichGpsContext(state);
-        return state.toResponse();
+        return buildResponse(state);
     }
 
     public SwapRequestResponse completeMockFinalValuation(long id) {
@@ -563,6 +564,8 @@ public class SwapRequestService {
         pickupRequest.changeStatus("COMPLETED");
         pickupRequestRepository.save(pickupRequest);
         restorePickup(state, pickupRequest);
+        enrichGpsContext(state);
+        state.applySettlement(crewSettlementCalculator.finalizeSettlement(state.toResponse()));
 
         Long crewId = state.getCrewId() == null ? DEMO_CREW_ID : state.getCrewId();
         CrewGpsState crewState = crewGpsStore.get(crewId);
@@ -609,7 +612,43 @@ public class SwapRequestService {
 
     private SwapRequestResponse buildResponse(SwapRequestState state) {
         enrichGpsContext(state);
-        return augmentTracking(state, augmentCrewReview(state.toResponse()));
+        return augmentSettlement(augmentTracking(state, augmentCrewReview(state.toResponse())));
+    }
+
+    private SwapRequestResponse augmentSettlement(SwapRequestResponse response) {
+        if (response.pickupRequest() == null) {
+            return response;
+        }
+
+        SwapRequestResponse.Settlement settlement = "COMPLETED".equals(response.pickupRequest().status())
+                ? crewSettlementCalculator.finalizeSettlement(response)
+                : crewSettlementCalculator.estimate(response);
+
+        return new SwapRequestResponse(
+                response.id(),
+                response.customerId(),
+                response.status(),
+                response.appliance(),
+                response.userConsent(),
+                response.captureEvidence(),
+                response.preValuation(),
+                response.rewardEstimate(),
+                response.selectedProduct(),
+                response.booking(),
+                response.pickupRequest(),
+                response.crewProfile(),
+                response.crewReview(),
+                response.dispatchInfo(),
+                response.tracking(),
+                response.finalValuation(),
+                response.credit(),
+                response.rewardOverview(),
+                response.deliveryTracking(),
+                response.pickupResultReport(),
+                response.recyclingReport(),
+                settlement,
+                response.notifications()
+        );
     }
 
     private SwapRequestResponse augmentCrewReview(SwapRequestResponse response) {
@@ -889,16 +928,16 @@ public class SwapRequestService {
         double baseDistance = topCrew == null ? 1800.0 : topCrew.distanceMeters();
         int matchScore = (int) Math.max(52, Math.min(97, Math.round(96 - (baseDistance / 120.0))));
         String dispatchAlertMessage = switch (valueOrDefault(state.getPickupStatus(), "")) {
-            case "REQUESTED", "CONFIRMED" -> "留ㅼ묶 ?먯닔媛 ?믪? ?щ（?먭쾶 ?곗꽑 諛곗감 ?뚮┝??諛쒖넚?덉뒿?덈떎.";
-            case "ASSIGNED" -> "諛곗젙???щ（媛 ?ъ슜???깆뿉 ?ㅼ떆媛??꾩튂瑜?怨듭쑀?섍퀬 ?덉뒿?덈떎.";
-            case "IN_PROGRESS" -> "?щ（媛 ?섍굅吏濡??대룞 以묒씠硫??ㅼ떆媛??꾩튂媛 媛깆떊?섍퀬 ?덉뒿?덈떎.";
-            case "ARRIVED" -> "?섍굅 ??e-waste 怨듭옣 ?대룞 以鍮꾧? 吏꾪뻾 以묒엯?덈떎.";
-            case "COMPLETED" -> "e-waste 怨듭옣 ?꾨떖???꾨즺?섏뿀?듬땲??";
-            default -> "?덉빟 ?먮뒗 諛붾줈肄??묒닔 ??諛곗감 ?뺣낫媛 ?쒖떆?⑸땲??";
+            case "REQUESTED", "CONFIRMED" -> "매칭 점수가 높은 크루에게 우선 배차 알림을 보내고 있어요.";
+            case "ASSIGNED" -> "배정된 크루가 수거 일정에 맞춰 위치를 공유하고 있어요.";
+            case "IN_PROGRESS" -> "크루가 수거지로 이동 중이며 실시간 위치가 갱신되고 있어요.";
+            case "ARRIVED" -> "소비자 수거가 완료되어 처리 허브로 이동 중이에요.";
+            case "COMPLETED" -> "처리 허브 전달이 완료됐어요.";
+            default -> "예약 또는 바로콜 접수 후 배차 정보가 표시됩니다.";
         };
         String dispatchReason = topCrew == null
-                ? "洹쇱쿂 ?щ（ ?뺣낫媛 ?꾩쭅 ?놁뒿?덈떎."
-                : "媛源뚯슫 ?щ（ 嫄곕━ " + Math.round(topCrew.distanceMeters()) + "m, ?꾩옱 ?대룞 ?숈꽑, 理쒓렐 ?섎씫 ?대젰??諛섏쁺?덉뒿?덈떎.";
+                ? "근처 크루 정보가 아직 없습니다."
+                : "가까운 크루 거리 " + Math.round(topCrew.distanceMeters()) + "m, 현재 이동 동선, 최근 수락 이력을 반영했어요.";
 
         state.setDispatchContext(
                 matchScore,
@@ -1107,8 +1146,7 @@ public class SwapRequestService {
 
     private SwapRequestResponse restoreAndRespond(SwapRequestEntity swapRequest) {
         SwapRequestState state = restoreState(swapRequest);
-        enrichGpsContext(state);
-        return state.toResponse();
+        return buildResponse(state);
     }
 
     private SwapRequestState restoreState(SwapRequestEntity swapRequest) {

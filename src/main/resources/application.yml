@@ -34,4 +34,30 @@ openai:
   api-key: ${OPENAI_API_KEY:}
   vision-model: ${OPENAI_VISION_MODEL:gpt-4o}
 
+swapit:
+  crew-settlement:
+    currency: INR
+    base-fee: 120
+    distance-unit-meters: 1000
+    fee-per-distance-unit: 25
+    minimum-distance-fee: 25
+    maximum-distance-fee: 120
+    fallback-distance-meters: 1000
+    scheduled-call-incentive: 0
+    instant-call-incentive: 30
+    completion-incentive: 25
+    penalty-per-count: 30
+    minimum-total: 120
+    appliance-size-surcharges:
+      small: 0
+      medium: 15
+      large: 35
+    appliance-type-surcharges:
+      microwave: 0
+      air_purifier: 10
+      washing_machine: 20
+      refrigerator: 30
+      air_conditioner: 25
+      tv: 20
+
 
