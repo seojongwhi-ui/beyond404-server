@@ -20,7 +20,7 @@ public class MarketController {
                     "category", "세탁기",
                     "name", "LG 11kg Front Load Washing Machine",
                     "price", 62900,
-                    "currency", "INR",
+                    "currency", "KRW",
                     "description", "AI Direct Drive와 Steam+ 기능을 갖춘 LG India 공식 세탁기 데모 상품입니다.",
                     "productUrl", "https://www.lg.com/in/laundry/front-loading-washing-machines/fhp1411z9p/"
             ),
@@ -29,7 +29,7 @@ public class MarketController {
                     "category", "냉장고",
                     "name", "LG 398L Double Door Refrigerator",
                     "price", 74900,
-                    "currency", "INR",
+                    "currency", "KRW",
                     "description", "Convertible 기능과 Wi-Fi 제어를 지원하는 LG India 공식 냉장고 데모 상품입니다.",
                     "productUrl", "https://www.lg.com/in/refrigerators/double-door-refrigerators/gl-t422vpzx/"
             ),
@@ -38,7 +38,7 @@ public class MarketController {
                     "category", "에어컨",
                     "name", "LG 5 Star 1.5 Ton Split AC",
                     "price", 45900,
-                    "currency", "INR",
+                    "currency", "KRW",
                     "description", "Dual Inverter와 AI Convertible 6-in-1 기능을 갖춘 LG India 공식 에어컨 데모 상품입니다.",
                     "productUrl", "https://www.lg.com/in/air-conditioners/split-air-conditioners/us-q19bnze3/"
             )

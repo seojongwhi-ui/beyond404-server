@@ -72,7 +72,7 @@ public class ValuationEntity {
         this.status = "READY";
         this.minAmount = minAmount;
         this.maxAmount = maxAmount;
-        this.currency = "INR";
+        this.currency = "KRW";
         this.summaryReason = summaryReason;
         this.exteriorReason = "사진상 외관 사용 흔적은 있으나 주요 파손은 확인되지 않았습니다.";
         this.partsReason = "일부 부품은 재사용 가능성이 있어 예상 보상가에 반영했습니다.";
