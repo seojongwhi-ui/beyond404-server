@@ -98,6 +98,7 @@ public class SwapRequestState {
     private Integer settlementIncentive;
     private Integer settlementPenalty;
     private Integer settlementTotalAmount;
+    private String settlementCurrency;
     private String settlementStatus;
 
     private String deliveryStatus;
@@ -360,6 +361,13 @@ public class SwapRequestState {
             return;
         }
 
+        if ("ARRIVED".equals(pickupStatus)) {
+            this.status = SwapRequestStatus.CREW_ARRIVED;
+            this.trackingPhase = "EN_ROUTE_TO_PROCESSING_CENTER";
+            this.trackingMessage = "소비자 수거가 완료되어 처리 허브로 이동 중입니다.";
+            return;
+        }
+
         if ("COMPLETED".equals(pickupStatus)) {
             this.status = SwapRequestStatus.REWARD_READY;
             this.trackingPhase = "DELIVERED_TO_EWASTE_HUB";
@@ -404,7 +412,7 @@ public class SwapRequestState {
 
         if ("ARRIVED".equals(pickupStatus)) {
             this.trackingPhase = "EN_ROUTE_TO_PROCESSING_CENTER";
-            this.trackingMessage = "수거 후 e-waste 공장으로 이동 중입니다.";
+            this.trackingMessage = "수거 완료 후 처리 허브로 이동 중입니다.";
             this.estimatedArrivalAt = LocalDateTime.now().plusMinutes(20);
         } else if ("ASSIGNED".equals(pickupStatus) || "IN_PROGRESS".equals(pickupStatus)) {
             this.trackingPhase = "EN_ROUTE_TO_PICKUP";
@@ -417,11 +425,11 @@ public class SwapRequestState {
     public void arriveCrew() {
         this.pickupStatus = "ARRIVED";
         this.status = SwapRequestStatus.CREW_ARRIVED;
-        this.trackingPhase = "PICKUP_CONFIRMED";
-        this.trackingMessage = "크루가 문앞에 도착해 수거를 진행 중입니다.";
+        this.trackingPhase = "EN_ROUTE_TO_PROCESSING_CENTER";
+        this.trackingMessage = "소비자 수거가 완료되어 처리 허브로 이동 중입니다.";
         this.estimatedArrivalAt = LocalDateTime.now().plusMinutes(20);
-        addTrackingEvent("CREW_ARRIVED", "크루 문앞 도착");
-        addNotification("크루 도착", "크루가 문앞에 도착했습니다.");
+        addTrackingEvent("CREW_ARRIVED", "소비자 수거 완료");
+        addNotification("수거 완료", "크루가 제품 수거를 완료했습니다.");
     }
 
     public void completePickup(String pickupPhotoFileName, String hubPhotoFileName, String inspectionMemo, String hubMemo) {
@@ -447,15 +455,23 @@ public class SwapRequestState {
         this.deliveryStatus = "PREPARING";
         this.deliveryUpdatedAt = LocalDateTime.now();
         this.status = SwapRequestStatus.REWARD_READY;
-        this.settlementBaseFee = 18000;
-        this.settlementDistanceFee = 3500;
-        this.settlementIncentive = 2000;
-        this.settlementPenalty = crewPenaltyCount > 0 ? 3000 : 0;
-        this.settlementTotalAmount = settlementBaseFee + settlementDistanceFee + settlementIncentive - settlementPenalty;
-        this.settlementStatus = "READY";
         createPickupResultReport();
         addTrackingEvent("EWASTE_HUB_DELIVERED", "e-waste 공장 전달 완료");
         addNotification("안심처리 완료", "e-waste 공장 전달이 완료되었습니다.");
+    }
+
+    public void applySettlement(SwapRequestResponse.Settlement settlement) {
+        if (settlement == null) {
+            return;
+        }
+
+        this.settlementBaseFee = settlement.baseFee();
+        this.settlementDistanceFee = settlement.distanceFee();
+        this.settlementIncentive = settlement.incentive();
+        this.settlementPenalty = settlement.penalty();
+        this.settlementTotalAmount = settlement.totalAmount();
+        this.settlementCurrency = settlement.currency();
+        this.settlementStatus = settlement.status();
     }
 
     public void completeMockFinalValuation() {
@@ -641,6 +657,7 @@ public class SwapRequestState {
                 settlementIncentive,
                 settlementPenalty,
                 settlementTotalAmount,
+                settlementCurrency,
                 settlementStatus
         );
 

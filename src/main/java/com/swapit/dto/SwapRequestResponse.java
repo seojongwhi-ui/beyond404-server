@@ -267,6 +267,7 @@ public record SwapRequestResponse(
             Integer incentive,
             Integer penalty,
             Integer totalAmount,
+            String currency,
             String status
     ) {
     }
