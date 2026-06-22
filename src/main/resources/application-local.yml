@@ -35,12 +35,12 @@ kakao:
 
 swapit:
   crew-settlement:
-    currency: INR
+    currency: KRW
     base-fee: 120
     distance-unit-meters: 1000
     fee-per-distance-unit: 25
     minimum-distance-fee: 25
-    maximum-distance-fee: 120
+    maximum-distance-fee: 300
     fallback-distance-meters: 1000
     scheduled-call-incentive: 0
     instant-call-incentive: 30
@@ -49,12 +49,12 @@ swapit:
     minimum-total: 120
     appliance-size-surcharges:
       small: 0
-      medium: 15
-      large: 35
+      medium: 60
+      large: 130
     appliance-type-surcharges:
       microwave: 0
-      air_purifier: 10
-      washing_machine: 20
-      refrigerator: 30
-      air_conditioner: 25
-      tv: 20
+      air_purifier: 20
+      washing_machine: 80
+      refrigerator: 110
+      air_conditioner: 90
+      tv: 50

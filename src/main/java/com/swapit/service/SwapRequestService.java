@@ -471,6 +471,10 @@ public class SwapRequestService {
     @Transactional
     public SwapRequestResponse acceptCall(long pickupRequestId) {
         SwapRequestState state = findByPickupRequestId(pickupRequestId);
+        if (hasBlockingActiveCall(pickupRequestId, DEMO_CREW_ID)) {
+            throw new ResponseStatusException(CONFLICT, "Crew already has an active pickup.");
+        }
+
         CrewGpsState assignedCrew = crewGpsStore.get(DEMO_CREW_ID);
         String crewName = assignedCrew == null ? DEMO_CREW_NAME : assignedCrew.crewName;
         state.acceptByCrew(DEMO_CREW_ID, crewName, DEMO_CREW_PHOTO, DEMO_CREW_RATING, DEMO_CREW_REVIEW_SUMMARY);
@@ -486,6 +490,21 @@ public class SwapRequestService {
         }
 
         return buildResponse(state);
+    }
+
+    private boolean hasBlockingActiveCall(long pickupRequestId, long crewId) {
+        return pickupRequestRepository.findAll().stream()
+                .filter(pickupRequest -> pickupRequest.getId() != pickupRequestId)
+                .map(PickupRequestEntity::getSwapRequest)
+                .map(this::restoreAndRespond)
+                .anyMatch(response -> {
+                    if (!hasPickupStatus(response, "ASSIGNED", "IN_PROGRESS", "ARRIVED")) {
+                        return false;
+                    }
+
+                    Long assignedCrewId = response.pickupRequest() == null ? null : response.pickupRequest().crewId();
+                    return assignedCrewId == null || assignedCrewId == crewId;
+                });
     }
 
     @Transactional
